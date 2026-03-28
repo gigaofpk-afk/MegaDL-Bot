@@ -1,7 +1,7 @@
+pyrogram==2.0.106  # Upgrade to newer stable version
+tgcrypto
 moviepy
 filetype
-pyrogram==1.4.16
-tgcrypto
 ffmpeg-python
 hurry.filesize
 git+https://github.com/asmsafone/mega.py.git
