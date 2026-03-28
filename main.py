@@ -22,7 +22,10 @@ if __name__ == "__main__":
         api_id=Config.API_ID,
         api_hash=Config.API_HASH,
         plugins=plugins,
-        ipv6=True   # <<< IMPORTANT FIX
+        ipv6=False,              # Force IPv4
+        device_model="Heroku",   # Helps Pyrogram pick stable DC
+        system_version="10",
+        app_version="1.4"
     )
 
     async def start_app():
