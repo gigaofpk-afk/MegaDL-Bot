@@ -7,8 +7,9 @@ import asyncio
 from config import Config
 from pyrogram import Client, idle
 
-# Fix Heroku time-sync issue
-time.sleep(3)
+# Stronger fix for Heroku time-sync issue
+# Wait before Pyrogram starts AND before first network call
+time.sleep(5)
 
 if __name__ == "__main__":
     if not os.path.isdir(Config.DOWNLOAD_LOCATION):
@@ -24,8 +25,13 @@ if __name__ == "__main__":
         plugins=plugins
     )
 
-    app.start()
-    print('\n\n>>> MegaDL-Bot Started. Join @AsmSafone!')
-    idle()
-    app.stop()
-    print('\n\n>>> MegaDL-Bot Stopped. Join @AsmSafone!')
+    # Additional async delay before start
+    async def start_app():
+        await asyncio.sleep(2)
+        await app.start()
+        print('\n\n>>> MegaDL-Bot Started. Join @AsmSafone!')
+        await idle()
+        await app.stop()
+        print('\n\n>>> MegaDL-Bot Stopped. Join @AsmSafone!')
+
+    asyncio.get_event_loop().run_until_complete(start_app())
