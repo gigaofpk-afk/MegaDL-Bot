@@ -1,9 +1,16 @@
+# Core
 pyrogram==2.0.106
-tgcrypto
+tgcrypto==1.2.5
+
+# Mega.nz support
+git+https://github.com/asmsafone/mega.py.git
+
+# Utilities
 moviepy
 filetype
 ffmpeg-python
 hurry.filesize
-git+https://github.com/asmsafone/mega.py.git
 aiohttp
 requests
+psutil
+python-dotenv
