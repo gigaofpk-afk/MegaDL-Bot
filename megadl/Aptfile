@@ -1,0 +1,4 @@
+# Aptfile - System dependencies for tgcrypto
+libffi-dev
+libssl-dev
+build-essential
