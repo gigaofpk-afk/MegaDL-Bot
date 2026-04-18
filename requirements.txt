@@ -1,7 +1,7 @@
 # Core
 pyrogram==2.0.106
 tgcrypto==1.2.5
-mega.py
+main.py
 aiohttp
 
 # Mega.nz (latest)
