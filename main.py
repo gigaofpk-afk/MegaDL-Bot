@@ -30,7 +30,7 @@ if not API_ID or not API_HASH or not BOT_TOKEN:
 # Pyrogram Client (SESSION FIXED FOR RAILWAY)
 # ---------------------------------------------------------
 app = Client(
-    session_name="/tmp/bot",   # <--- FIXED: Railway-safe session path
+    "/tmp/bot",   # <--- Pyrogram 1.x syntax
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
@@ -60,7 +60,7 @@ async def start_handler(client, message):
 # ---------------------------------------------------------
 # Mega.nz Link Handler
 # ---------------------------------------------------------
-@app.on_message(filters.regex(r"https?://mega\.nz"))
+@app.on_message(filters.regex(r'https?://mega\.nz'))
 async def mega_handler(client, message):
     url = message.text.strip()
     await message.reply_text("Processing your Mega.nz link...")
