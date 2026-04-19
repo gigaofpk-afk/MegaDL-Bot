@@ -1,5 +1,5 @@
-pyrogram==2.0.106
-tgcrypto==1.2.5
+pyrogram==1.4.16
+tgcrypto
 mega.py
 aiohttp
 git+https://github.com/asmsafone/mega.py.git
