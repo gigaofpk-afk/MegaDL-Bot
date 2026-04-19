@@ -25,8 +25,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 MEGA_EMAIL = os.getenv("MEGA_EMAIL", "")
 MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "")
 
-OWNER_ID = int(os.getenv("OWNER_ID", "0")) if os.getenv("OWNER_ID") else None
-
 if not all([API_ID, API_HASH, BOT_TOKEN]):
     logger.error("Missing one or more required Telegram environment variables.")
     sys.exit(1)
@@ -41,7 +39,6 @@ app = Client(
 
 # ---------- Mega.nz Client (Dual Mode) ----------
 mega = Mega()
-
 USE_LOGIN = bool(MEGA_EMAIL and MEGA_PASSWORD)
 
 try:
@@ -50,7 +47,7 @@ try:
         mega_client = mega.login(MEGA_EMAIL, MEGA_PASSWORD)
     else:
         logger.info("⚡ Using Mega.nz BYPASS (anonymous) mode")
-        mega_client = mega.login()  # anonymous session
+        mega_client = mega.login()
 except Exception as e:
     logger.error(f"Failed to initialize Mega client: {e}")
     sys.exit(1)
@@ -61,78 +58,104 @@ def is_mega_link(text: str) -> bool:
     return "mega.nz" in text
 
 
-async def download_from_mega(url: str, dest: str) -> str:
-    """
-    Download file from Mega.nz using:
-    - Login mode (if credentials exist)
-    - Anonymous mode (if no credentials)
-    """
+async def download_single(node, dest: str) -> str:
+    """Download a single Mega file."""
     loop = asyncio.get_running_loop()
-    logger.info(f"Starting MEGA download: {url}")
+    file_path = await loop.run_in_executor(None, mega_client.download, node, dest)
+    return file_path
 
-    # Find file node
+
+async def download_folder(url: str, dest: str) -> list:
+    """Download all files inside a Mega folder."""
+    loop = asyncio.get_running_loop()
+
     try:
-        node = await loop.run_in_executor(None, mega_client.find, url)
-    except Exception as e:
-        logger.error(f"Error while finding MEGA node: {e}")
-        node = None
+        folder = await loop.run_in_executor(None, mega_client.find, url)
+    except Exception:
+        folder = None
 
-    if not node:
-        raise ValueError(
-            "File not found or Mega.nz blocked access for this link."
-        )
+    if not folder:
+        raise ValueError("Folder not found or Mega blocked access.")
 
-    # Download
+    # Get folder file list
     try:
-        file_path = await loop.run_in_executor(None, mega_client.download, node, dest)
-        logger.info(f"MEGA download finished: {file_path}")
-        return file_path
-
+        files = await loop.run_in_executor(None, mega_client.get_files, folder)
     except Exception as e:
-        logger.error(f"Error during MEGA download: {e}")
-        if not USE_LOGIN:
-            raise ValueError(
-                f"Anonymous mode failed: {e}. "
-                "Try setting MEGA_EMAIL and MEGA_PASSWORD for full login mode."
-            )
-        raise e
+        raise ValueError(f"Failed to list folder files: {e}")
+
+    downloaded_files = []
+
+    for file_id, file_info in files.items():
+        if file_info["t"] == 0:  # 0 = file, 1 = folder
+            try:
+                node = mega_client.find(file_info["h"])
+                file_path = await download_single(node, dest)
+                downloaded_files.append(file_path)
+            except Exception as e:
+                logger.error(f"Failed to download file: {e}")
+
+    return downloaded_files
 
 
 # ---------- Handlers ----------
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(_, message: Message):
     mode = "LOGIN" if USE_LOGIN else "BYPASS (anonymous)"
-    text = (
-        "👋 **MegaDL-Bot is online.**\n\n"
-        "Send me a **Mega.nz link**, and I’ll download the file and upload it here.\n\n"
-        f"Current MEGA mode: **{mode}**\n"
-        "- To use anonymous mode, leave MEGA_EMAIL/MEGA_PASSWORD empty.\n"
-        "- To use login mode, set MEGA_EMAIL/MEGA_PASSWORD in Railway."
+    await message.reply_text(
+        f"👋 **MegaDL-Bot Ready**\n\n"
+        f"Send me a Mega.nz link.\n"
+        f"- File link → I download it\n"
+        f"- Folder link → I download **ALL files automatically**\n\n"
+        f"Current mode: **{mode}**"
     )
-    await message.reply_text(text)
 
 
 @app.on_message(filters.private & filters.text)
 async def mega_handler(_, message: Message):
-    text = message.text.strip()
+    url = message.text.strip()
 
-    if not is_mega_link(text):
+    if not is_mega_link(url):
         await message.reply_text("Please send a valid **Mega.nz** link.")
         return
 
-    status = await message.reply_text("🔄 Downloading from Mega.nz, please wait...")
+    status = await message.reply_text("🔄 Processing Mega link...")
 
     try:
-        # Download to /tmp (Railway ephemeral FS)
-        file_path = await download_from_mega(text, "/tmp")
-        file_name = os.path.basename(file_path)
+        # Detect if folder or file
+        if "/folder/" in url:
+            await status.edit_text("📁 Folder detected — downloading all files...")
 
-        await status.edit_text("⬆️ Uploading to Telegram...")
-        await message.reply_document(
-            document=file_path,
-            caption=f"✅ Downloaded from Mega.nz\n`{file_name}`",
-        )
-        await status.delete()
+            files = await download_folder(url, "/tmp")
+
+            if not files:
+                await status.edit_text("❌ No files found in folder.")
+                return
+
+            for file_path in files:
+                file_name = os.path.basename(file_path)
+                await message.reply_document(
+                    document=file_path,
+                    caption=f"📥 `{file_name}`"
+                )
+
+            await status.edit_text("✅ All files downloaded and uploaded.")
+
+        else:
+            await status.edit_text("📄 File detected — downloading...")
+
+            node = mega_client.find(url)
+            if not node:
+                raise ValueError("File not found.")
+
+            file_path = await download_single(node, "/tmp")
+            file_name = os.path.basename(file_path)
+
+            await message.reply_document(
+                document=file_path,
+                caption=f"📥 `{file_name}`"
+            )
+
+            await status.delete()
 
     except Exception as e:
         logger.exception("Error in mega_handler")
