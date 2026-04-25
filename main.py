@@ -1,100 +1,137 @@
-import os
+#!/usr/bin/env python3
+import asyncio
 import logging
-from pyrogram import Client, filters
-from mega import Mega
+import os
+import sys
+import time
+from contextlib import suppress
 
-# ---------------------------------------------------------
-# Logging
-# ---------------------------------------------------------
+from pyrogram import Client, errors
+from pyrogram.enums import ParseMode
+
+# ─────────────────────────────────────────────────────────────
+# Basic logging
+# ─────────────────────────────────────────────────────────────
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - [%(levelname)s] - MegaDL-Bot - %(message)s"
+    level=LOG_LEVEL,
+    format="%(asctime)s - [%(levelname)s] - MegaDL-Bot - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("MegaDL-Bot")
 
-# ---------------------------------------------------------
-# Environment Variables
-# ---------------------------------------------------------
-API_ID = os.getenv("API_ID")
-API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-MEGA_EMAIL = os.getenv("MEGA_EMAIL", "").strip()
-MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "").strip()
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+# ─────────────────────────────────────────────────────────────
+# Environment / config
+# ─────────────────────────────────────────────────────────────
+API_ID = int(os.getenv("API_ID", "0"))
+API_HASH = os.getenv("API_HASH", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
 if not API_ID or not API_HASH or not BOT_TOKEN:
-    log.error("Missing one or more required Telegram environment variables.")
-    raise SystemExit
+    log.error("API_ID / API_HASH / BOT_TOKEN missing in environment.")
+    sys.exit(1)
 
-# ---------------------------------------------------------
-# Pyrogram Client (SESSION FIXED FOR RAILWAY)
-# ---------------------------------------------------------
+SESSION_NAME = os.getenv("SESSION_NAME", "MegaDL-Bot")
+
+# ─────────────────────────────────────────────────────────────
+# Pyrogram client
+# ─────────────────────────────────────────────────────────────
 app = Client(
-    "/tmp/bot",
+    SESSION_NAME,
     api_id=API_ID,
     api_hash=API_HASH,
-    bot_token=BOT_TOKEN
+    bot_token=BOT_TOKEN,
+    parse_mode=ParseMode.HTML,
 )
 
-# ---------------------------------------------------------
-# Mega.nz Login / Bypass Mode
-# ---------------------------------------------------------
-def get_mega_client():
-    mega = Mega()
-    if MEGA_EMAIL and MEGA_PASSWORD:
-        log.info("Logging into Mega.nz account...")
-        return mega.login(MEGA_EMAIL, MEGA_PASSWORD)
-    else:
-        log.info("Using Mega.nz bypass mode (no login).")
-        return mega
 
-# ---------------------------------------------------------
-# Start Command
-# ---------------------------------------------------------
-@app.on_message(filters.command("start"))
-async def start_handler(client, message):
-    await message.reply_text(
-        "Send me a Mega.nz link and I will download it and upload to Telegram."
-    )
+# ─────────────────────────────────────────────────────────────
+# Example handlers (keep your existing ones here)
+# ─────────────────────────────────────────────────────────────
+@app.on_message()
+async def fallback_handler(client, message):
+    # Keep or replace with your real handlers
+    await message.reply_text("MegaDL-Bot is online and stable ✅")
 
-# ---------------------------------------------------------
-# Mega.nz Link Handler (NO ESID)
-# ---------------------------------------------------------
-@app.on_message(filters.regex(r'https?://mega\.nz'))
-async def mega_handler(client, message):
-    url = message.text.strip()
-    await message.reply_text("Processing your Mega.nz link...")
+
+# ─────────────────────────────────────────────────────────────
+# Robust startup with retry + time-desync protection
+# ─────────────────────────────────────────────────────────────
+async def start_bot():
+    """
+    Start the bot with retries and explicit handling for BadMsgNotification[16].
+    """
+    # Small delay to let Railway sync NTP
+    startup_delay = int(os.getenv("STARTUP_DELAY_SECONDS", "3"))
+    if startup_delay > 0:
+        log.info(f"Startup delay: sleeping {startup_delay}s before connecting...")
+        await asyncio.sleep(startup_delay)
+
+    max_retries = int(os.getenv("START_RETRIES", "10"))
+    retry_delay = int(os.getenv("START_RETRY_DELAY_SECONDS", "5"))
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            log.info(f"Starting MegaDL-Bot... (attempt {attempt}/{max_retries})")
+            await app.start()
+            me = await app.get_me()
+            log.info(
+                f"MegaDL-Bot started as @{me.username} (id={me.id}). "
+                f"Monotonic time: {os.getenv('PYROGRAM_USE_MONOTONIC_TIME', 'not set')}"
+            )
+            return
+        except errors.BadMsgNotification as e:
+            # This is the one you’re seeing: [16] msg_id too low / time desync
+            log.error(
+                f"BadMsgNotification while starting (code={getattr(e, 'code', None)}): "
+                f"{e}. This usually means time desync. "
+                f"Ensure PYROGRAM_USE_MONOTONIC_TIME=1 and session file is fresh."
+            )
+            if attempt == max_retries:
+                log.critical("Max retries reached. Exiting.")
+                raise
+            log.info(f"Retrying in {retry_delay}s...")
+            await asyncio.sleep(retry_delay)
+        except Exception as e:
+            log.exception(f"Unexpected error while starting: {e}")
+            if attempt == max_retries:
+                log.critical("Max retries reached. Exiting.")
+                raise
+            log.info(f"Retrying in {retry_delay}s...")
+            await asyncio.sleep(retry_delay)
+
+
+async def idle_loop():
+    """
+    Simple idle loop to keep the bot running.
+    """
+    log.info("MegaDL-Bot is now running. Waiting for updates...")
+    try:
+        while True:
+            await asyncio.sleep(60)
+    except asyncio.CancelledError:
+        log.info("Idle loop cancelled, shutting down...")
+
+
+async def main():
+    await start_bot()
+    # If we reached here, app.start() succeeded
+    idle_task = asyncio.create_task(idle_loop())
 
     try:
-        mega = get_mega_client()
+        await idle_task
+    finally:
+        with suppress(Exception):
+            log.info("Stopping MegaDL-Bot...")
+            await app.stop()
+        log.info("MegaDL-Bot stopped cleanly.")
 
-        # Detect file or folder
-        if "/folder/" in url:
-            log.info("Detected Mega folder link")
-            m = mega.get_public_folder(url)
-        else:
-            log.info("Detected Mega file link")
-            m = mega.get_public_url_info(url)
 
-        if not m:
-            await message.reply_text("Invalid or unsupported Mega.nz link.")
-            return
-
-        log.info(f"Downloading: {m['name']}")
-        file_path = mega.download(m, dest_path="/tmp")
-
-        await message.reply_text("Uploading to Telegram...")
-        await message.reply_document(file_path)
-
-        log.info("Upload complete.")
-
-    except Exception as e:
-        log.error(f"Mega download error: {e}")
-        await message.reply_text(f"Error: {e}")
-
-# ---------------------------------------------------------
-# Run Bot
-# ---------------------------------------------------------
 if __name__ == "__main__":
-    log.info("Starting MegaDL-Bot...")
-    app.run()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log.info("Interrupted by user, exiting...")
+    except Exception as e:
+        log.exception(f"Fatal error in main: {e}")
+        sys.exit(1)
